@@ -19,10 +19,11 @@ export const transformVHtml: DirectiveTransform = (dir, node, context) => {
     node.children.length = 0
   }
   return {
-    props: createObjectProperty(
-      createSimpleExpression(`innerHTML`, true, loc),
-      exp || createSimpleExpression('', true)
-    ),
-    needRuntime: false
+    props: [
+      createObjectProperty(
+        createSimpleExpression(`innerHTML`, true, loc),
+        exp || createSimpleExpression('', true)
+      )
+    ]
   }
 }
