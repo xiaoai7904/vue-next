@@ -1,17 +1,27 @@
 {
   "name": "@vue/compiler-sfc",
-  "version": "3.0.2",
+  "version": "3.5.19",
   "description": "@vue/compiler-sfc",
   "main": "dist/compiler-sfc.cjs.js",
+  "module": "dist/compiler-sfc.esm-browser.js",
   "types": "dist/compiler-sfc.d.ts",
   "files": [
     "dist"
   ],
+  "exports": {
+    ".": {
+      "types": "./dist/compiler-sfc.d.ts",
+      "node": "./dist/compiler-sfc.cjs.js",
+      "module": "./dist/compiler-sfc.esm-browser.js",
+      "import": "./dist/compiler-sfc.esm-browser.js",
+      "require": "./dist/compiler-sfc.cjs.js"
+    },
+    "./*": "./*"
+  },
   "buildOptions": {
     "name": "VueCompilerSFC",
     "formats": [
       "cjs",
-      "global",
       "esm-browser"
     ],
     "prod": false,
@@ -19,7 +29,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vuejs/vue-next.git",
+    "url": "git+https://github.com/vuejs/core.git",
     "directory": "packages/compiler-sfc"
   },
   "keywords": [
@@ -28,34 +38,30 @@
   "author": "Evan You",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/vuejs/vue-next/issues"
+    "url": "https://github.com/vuejs/core/issues"
   },
-  "homepage": "https://github.com/vuejs/vue-next/tree/master/packages/compiler-sfc#readme",
-  "peerDependencies": {
-    "vue": "3.0.2"
-  },
+  "homepage": "https://github.com/vuejs/core/tree/main/packages/compiler-sfc#readme",
   "dependencies": {
-    "@babel/parser": "^7.12.0",
-    "@babel/types": "^7.12.0",
-    "@vue/compiler-core": "3.0.2",
-    "@vue/compiler-dom": "3.0.2",
-    "@vue/compiler-ssr": "3.0.2",
-    "@vue/shared": "3.0.2",
-    "consolidate": "^0.16.0",
-    "estree-walker": "^2.0.1",
-    "hash-sum": "^2.0.0",
-    "lru-cache": "^5.1.1",
-    "magic-string": "^0.25.7",
-    "merge-source-map": "^1.1.0",
-    "postcss": "^7.0.32",
-    "postcss-modules": "^3.2.2",
-    "postcss-selector-parser": "^6.0.4",
-    "source-map": "^0.6.1"
+    "@babel/parser": "catalog:",
+    "@vue/compiler-core": "workspace:*",
+    "@vue/compiler-dom": "workspace:*",
+    "@vue/compiler-ssr": "workspace:*",
+    "@vue/shared": "workspace:*",
+    "estree-walker": "catalog:",
+    "magic-string": "catalog:",
+    "postcss": "^8.5.6",
+    "source-map-js": "catalog:"
   },
   "devDependencies": {
-    "@types/consolidate": "^0.14.0",
-    "@types/lru-cache": "^5.1.0",
-    "pug": "^2.0.4",
-    "sass": "^1.26.9"
+    "@babel/types": "catalog:",
+    "@vue/consolidate": "^1.0.0",
+    "hash-sum": "^2.0.0",
+    "lru-cache": "10.1.0",
+    "merge-source-map": "^1.1.0",
+    "minimatch": "~10.0.3",
+    "postcss-modules": "^6.0.1",
+    "postcss-selector-parser": "^7.1.0",
+    "pug": "^3.0.3",
+    "sass": "^1.90.0"
   }
 }

@@ -1,25 +1,23 @@
-import { DirectiveTransform, DirectiveTransformResult } from '../transform'
+import type { DirectiveTransform, DirectiveTransformResult } from '../transform'
 import {
+  type DirectiveNode,
+  ElementTypes,
+  type ExpressionNode,
+  NodeTypes,
+  type SimpleExpressionNode,
   createCompoundExpression,
   createObjectProperty,
   createSimpleExpression,
-  DirectiveNode,
-  ElementTypes,
-  ExpressionNode,
-  NodeTypes,
-  SimpleExpressionNode
 } from '../ast'
 import { camelize, toHandlerKey } from '@vue/shared'
-import { createCompilerError, ErrorCodes } from '../errors'
+import { ErrorCodes, createCompilerError } from '../errors'
 import { processExpression } from './transformExpression'
 import { validateBrowserExpression } from '../validateExpression'
-import { hasScopeRef, isMemberExpression } from '../utils'
+import { hasScopeRef, isFnExpression, isMemberExpression } from '../utils'
 import { TO_HANDLER_KEY } from '../runtimeHelpers'
 
-const fnExpRE = /^\s*([\w$_]+|\([^)]*?\))\s*=>|^\s*function(?:\s+[\w$]+)?\s*\(/
-
 export interface VOnDirectiveNode extends DirectiveNode {
-  // v-on without arg is handled directly in ./transformElements.ts due to it affecting
+  // v-on without arg is handled directly in ./transformElement.ts due to its affecting
   // codegen for the entire props object. This transform here is only for v-on
   // *with* args.
   arg: ExpressionNode
@@ -32,7 +30,7 @@ export const transformOn: DirectiveTransform = (
   dir,
   node,
   context,
-  augmentor
+  augmentor,
 ) => {
   const { loc, modifiers, arg } = dir as VOnDirectiveNode
   if (!dir.exp && !modifiers.length) {
@@ -41,19 +39,30 @@ export const transformOn: DirectiveTransform = (
   let eventName: ExpressionNode
   if (arg.type === NodeTypes.SIMPLE_EXPRESSION) {
     if (arg.isStatic) {
-      const rawName = arg.content
-      // for all event listeners, auto convert it to camelCase. See issue #2249
-      eventName = createSimpleExpression(
-        toHandlerKey(camelize(rawName)),
-        true,
-        arg.loc
-      )
+      let rawName = arg.content
+      if (__DEV__ && rawName.startsWith('vnode')) {
+        context.onError(createCompilerError(ErrorCodes.X_VNODE_HOOKS, arg.loc))
+      }
+      if (rawName.startsWith('vue:')) {
+        rawName = `vnode-${rawName.slice(4)}`
+      }
+      const eventString =
+        node.tagType !== ElementTypes.ELEMENT ||
+        rawName.startsWith('vnode') ||
+        !/[A-Z]/.test(rawName)
+          ? // for non-element and vnode lifecycle event listeners, auto convert
+            // it to camelCase. See issue #2249
+            toHandlerKey(camelize(rawName))
+          : // preserve case for plain element listeners that have uppercase
+            // letters, as these may be custom elements' custom events
+            `on:${rawName}`
+      eventName = createSimpleExpression(eventString, true, arg.loc)
     } else {
       // #2388
       eventName = createCompoundExpression([
         `${context.helperString(TO_HANDLER_KEY)}(`,
         arg,
-        `)`
+        `)`,
       ])
     }
   } else {
@@ -70,21 +79,31 @@ export const transformOn: DirectiveTransform = (
   if (exp && !exp.content.trim()) {
     exp = undefined
   }
-  let isCacheable: boolean = context.cacheHandlers && !exp
+  let shouldCache: boolean = context.cacheHandlers && !exp && !context.inVOnce
   if (exp) {
-    const isMemberExp = isMemberExpression(exp.content)
-    const isInlineStatement = !(isMemberExp || fnExpRE.test(exp.content))
+    const isMemberExp = isMemberExpression(exp, context)
+    const isInlineStatement = !(isMemberExp || isFnExpression(exp, context))
     const hasMultipleStatements = exp.content.includes(`;`)
 
     // process the expression since it's been skipped
     if (!__BROWSER__ && context.prefixIdentifiers) {
       isInlineStatement && context.addIdentifiers(`$event`)
-      exp = processExpression(exp, context, false, hasMultipleStatements)
+      exp = dir.exp = processExpression(
+        exp,
+        context,
+        false,
+        hasMultipleStatements,
+      )
       isInlineStatement && context.removeIdentifiers(`$event`)
       // with scope analysis, the function is hoistable if it has no reference
       // to scope variables.
-      isCacheable =
+      shouldCache =
         context.cacheHandlers &&
+        // unnecessary to cache inside v-once
+        !context.inVOnce &&
+        // runtime constants don't need to be cached
+        // (this is analyzed by compileScript in SFC <script setup>)
+        !(exp.type === NodeTypes.SIMPLE_EXPRESSION && exp.constType > 0) &&
         // #1541 bail if this is a member exp handler passed to a component -
         // we need to use the original function to preserve arity,
         // e.g. <transition> relies on checking cb.length to determine
@@ -98,11 +117,11 @@ export const transformOn: DirectiveTransform = (
       // to a function, turn it into invocation (and wrap in an arrow function
       // below) so that it always accesses the latest value when called - thus
       // avoiding the need to be patched.
-      if (isCacheable && isMemberExp) {
+      if (shouldCache && isMemberExp) {
         if (exp.type === NodeTypes.SIMPLE_EXPRESSION) {
-          exp.content += `(...args)`
+          exp.content = `${exp.content} && ${exp.content}(...args)`
         } else {
-          exp.children.push(`(...args)`)
+          exp.children = [...exp.children, ` && `, ...exp.children, `(...args)`]
         }
       }
     }
@@ -112,18 +131,24 @@ export const transformOn: DirectiveTransform = (
         exp as SimpleExpressionNode,
         context,
         false,
-        hasMultipleStatements
+        hasMultipleStatements,
       )
     }
 
-    if (isInlineStatement || (isCacheable && isMemberExp)) {
+    if (isInlineStatement || (shouldCache && isMemberExp)) {
       // wrap inline statement in a function expression
       exp = createCompoundExpression([
-        `${isInlineStatement ? `$event` : `(...args)`} => ${
-          hasMultipleStatements ? `{` : `(`
-        }`,
+        `${
+          isInlineStatement
+            ? !__BROWSER__ && context.isTS
+              ? `($event: any)`
+              : `$event`
+            : `${
+                !__BROWSER__ && context.isTS ? `\n//@ts-ignore\n` : ``
+              }(...args)`
+        } => ${hasMultipleStatements ? `{` : `(`}`,
         exp,
-        hasMultipleStatements ? `}` : `)`
+        hasMultipleStatements ? `}` : `)`,
       ])
     }
   }
@@ -132,9 +157,9 @@ export const transformOn: DirectiveTransform = (
     props: [
       createObjectProperty(
         eventName,
-        exp || createSimpleExpression(`() => {}`, false, loc)
-      )
-    ]
+        exp || createSimpleExpression(`() => {}`, false, loc),
+      ),
+    ],
   }
 
   // apply extended compiler augmentor
@@ -142,12 +167,14 @@ export const transformOn: DirectiveTransform = (
     ret = augmentor(ret)
   }
 
-  if (isCacheable) {
+  if (shouldCache) {
     // cache handlers so that it's always the same handler being passed down.
     // this avoids unnecessary re-renders when users use inline handlers on
     // components.
     ret.props[0].value = context.cache(ret.props[0].value)
   }
 
+  // mark the key as handler for props normalization check
+  ret.props.forEach(p => (p.key.isHandlerKey = true))
   return ret
 }
