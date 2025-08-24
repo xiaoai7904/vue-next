@@ -16,15 +16,38 @@
  * Check the `patchElement` function in '../../runtime-core/src/renderer.ts' to see how the
  * flags are handled during diff.
  */
+/**
+ * - 1、1 << 1、1 << 2 分别表示把二进制的第 0、1、2 位单独置 1（十进制值分别是 1、2、4）。这样每个标记都占用不同的“位”（bit），互不重叠，可以用位运算高效组合与检查。
+- 这种写法的思路是用“位掩码（bitmask）”来表达一组可组合的布尔特性：用按位或 | 组合多个标记，用按位与 & 判断某个标记是否存在。它是 Vue 在 PatchFlags、ShapeFlags 等处的通用设计。
+为什么用 1、1<<1、1<<2 这样的位移定义
+
+- 每个标记对应一个唯一的二进制位：
+  - 1 表示 0001b（第 0 位）
+  - 1 << 1 表示 0010b（第 1 位）
+  - 1 << 2 表示 0100b（第 2 位）
+- 好处：
+  - 可组合：多个标记可以用 | 叠加进一个整数，比如 TEXT | CLASS | STYLE，保持信息紧凑。
+  - 易判断：判断是否包含某个标记用 &，例如 if (flag & STYLE)。
+  - 性能好：整数位运算非常快，且内存占用小（一个 int 装下多种布尔状态）。
+  - 可维护：用位移表达“第几位”更直观，避免直接写 2、4、8 这样的魔法数字；后续新增标记只需继续使用 1<<n，天然不冲突。
+- 在 Vue 中的典型用法：
+  - PatchFlags（编译期补丁标记）采用位掩码，用于指明“哪些地方是动态的”，运行时据此精准打补丁，避免全量 diff。定义见 `patchFlags.ts` ，例如 STYLE = 1 << 2 就是“动态 style”。
+  - ShapeFlags（VNode 形态标记）也是位掩码，表示“节点是什么”以及“children 是什么形态”，定义见 `shapeFlags.ts` 。例如：
+    - ELEMENT = 1（元素）
+    - FUNCTIONAL_COMPONENT = 1 << 1、STATEFUL_COMPONENT = 1 << 2
+    - 还可以组合：COMPONENT = STATEFUL_COMPONENT | FUNCTIONAL_COMPONENT，这正体现了“位掩码可组合”的优势。
+ */
 export enum PatchFlags {
   /**
    * Indicates an element with dynamic textContent (children fast path)
    */
+  // 子节点是“动态文本”。更新时走 children 的快速路径，仅更新 textContent
   TEXT = 1,
 
   /**
    * Indicates an element with dynamic class binding.
    */
+  // 动态 class 绑定。运行时直接对 class 进行有针对性的打补丁
   CLASS = 1 << 1,
 
   /**
@@ -38,6 +61,7 @@ export enum PatchFlags {
    * render() { return e('div', { style }) }
    * ```
    */
+  // 动态 style。编译器会把静态 style 预提升为对象，动态的部分由运行时定向更新。
   STYLE = 1 << 2,
 
   /**
@@ -47,6 +71,7 @@ export enum PatchFlags {
    * array that contains the keys of the props that may change so the runtime
    * can diff them faster (without having to worry about removed props)
    */
+  // 有“非 class/style 的动态属性”，或组件上存在任意动态 props。此时 VNode 会带一个 dynamicProps: string[]，列出可能变化的属性集合，运行时只 diff 这些 key（且无需处理“被移除的属性”的情况）。
   PROPS = 1 << 3,
 
   /**
@@ -54,6 +79,7 @@ export enum PatchFlags {
    * diff is always needed to remove the old key. This flag is mutually
    * exclusive with CLASS, STYLE and PROPS.
    */
+  // 存在“动态 key”属性（例如 v-bind="obj" 且 obj 的 key 可能变化）。这时需要完整 diff，以便能正确移除旧 key。与 CLASS/STYLE/PROPS 互斥。
   FULL_PROPS = 1 << 4,
 
   /**
@@ -61,21 +87,25 @@ export enum PatchFlags {
    * (but not necessarily patching)
    * e.g. event listeners & v-bind with prop modifier
    */
+  // - 仅 SSR 水合相关，表示需要做 props hydration（不一定需要 patch），例如事件监听或带 .prop 修饰的 v-bind。
   NEED_HYDRATION = 1 << 5,
 
   /**
    * Indicates a fragment whose children order doesn't change.
    */
+  // Fragment 子节点顺序稳定（不变更）。更新可走更快路径。
   STABLE_FRAGMENT = 1 << 6,
 
   /**
    * Indicates a fragment with keyed or partially keyed children
    */
+  // 子节点是“动态 keyed 节点”（key 变化），或“动态 keyed 节点 + 静态节点”。更新时需要完整 diff。
   KEYED_FRAGMENT = 1 << 7,
 
   /**
    * Indicates a fragment with unkeyed children.
    */
+  // 子节点是“动态 unkeyed 节点”（key 变化），或“动态 unkeyed 节点 + 静态节点”。更新时需要完整 diff。
   UNKEYED_FRAGMENT = 1 << 8,
 
   /**
@@ -84,6 +114,7 @@ export enum PatchFlags {
    * and onVnodeXXX hooks, it simply marks the vnode so that a parent block
    * will track it.
    */
+  // 仅需要非 props 打补丁，例如 ref 或指令 (onVnodeXXX 钩子)。因为每个打补丁的 vnode 都检查 ref 和 onVnodeXXX 钩子，所以它只需简单地标记 vnode，以便父块可以跟踪它。
   NEED_PATCH = 1 << 9,
 
   /**
@@ -91,6 +122,7 @@ export enum PatchFlags {
    * iterated value, or dynamic slot names).
    * Components with this flag are always force updated.
    */
+  // 动态插槽（例如 v-slot 引用 v-for 迭代值，或动态插槽名）。组件无论是否有动态插槽，都需要强制更新。
   DYNAMIC_SLOTS = 1 << 10,
 
   /**
@@ -98,6 +130,7 @@ export enum PatchFlags {
    * comments at the root level of a template. This is a dev-only flag since
    * comments are stripped in production.
    */
+  // 仅开发环境，根节点是注释节点。这是一个开发环境的标志，因为在生产环境中注释会被 stripping。
   DEV_ROOT_FRAGMENT = 1 << 11,
 
   /**
@@ -112,6 +145,7 @@ export enum PatchFlags {
    * Indicates a cached static vnode. This is also a hint for hydration to skip
    * the entire sub tree since static content never needs to be updated.
    */
+  // 静态节点。这是一个 hydration 相关的标志，因为静态节点永远不需要更新。
   CACHED = -1,
   /**
    * A special flag that indicates that the diffing algorithm should bail out
@@ -120,6 +154,7 @@ export enum PatchFlags {
    * render functions, which should always be fully diffed)
    * OR manually cloneVNodes
    */
+  // 强制 diff。例如，renderSlot() 创建的 block fragment 遇到非编译器生成的 slot（手动写的 render 函数）时，需要完整 diff。或手动 cloneVNodes 时也需要完整 diff。
   BAIL = -2,
 }
 

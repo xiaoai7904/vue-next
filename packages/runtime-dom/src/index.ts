@@ -136,6 +136,18 @@ export const createApp = ((...args) => {
     }
     const proxy = mount(container, false, resolveRootNamespace(container))
     if (container instanceof Element) {
+      /**
+       * 这是 DOM 端对挂载完成后的一个清理/显隐处理。
+
+      - v-cloak 是一个“占位属性”，通常配合 CSS 使用来避免未编译模板在页面首屏闪烁（FOUC）。常见做法是在根容器上写 v-cloak，并加样式 [v-cloak]{ display:none }，这样在 Vue 挂载之前容器被隐藏，避免看到 {{ msg }} 之类的原始插值。
+      - 挂载完成后，这个属性已经没有意义了，而且如果不移除，它仍会命中 [v-cloak] 样式，导致内容继续被隐藏。因此需要在挂载成功后移除 v-cloak，恢复可见。
+      - 这正是 `index.ts` 第 139 行 container.removeAttribute('v-cloak') 的作用：确保挂载成功后解除对根容器的隐藏。
+      - 紧接着下一行会给根容器加 data-v-app 标记，方便工具或样式定位到应用的根节点。
+      简单理解：
+
+      - 挂载前：用 v-cloak 隐藏，防止“原始模板”曝光。
+      - 挂载后：移除 v-cloak，显示已渲染好的内容。
+       */
       container.removeAttribute('v-cloak')
       container.setAttribute('data-v-app', '')
     }

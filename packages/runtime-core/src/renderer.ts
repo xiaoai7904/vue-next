@@ -339,25 +339,34 @@ function baseCreateRenderer(
 ): HydrationRenderer
 
 // implementation
+// 渲染器工厂：根据宿主平台能力创建通用渲染器（DOM/自定义）
 function baseCreateRenderer(
+  // 宿主平台提供的一组原语操作（插入、删除、创建节点、设置属性等）
   options: RendererOptions,
+  // 可选：SSR hydration 相关函数创建器
   createHydrationFns?: typeof createHydrationFunctions,
 ): any {
   // compile-time feature flags check
+  // 在打包器环境且非测试环境下
   if (__ESM_BUNDLER__ && !__TEST__) {
+    // 初始化当前构建启用/禁用的特性标志（按构建宏）
     initFeatureFlags()
   }
 
+  // 获取全局对象（window / global / self）
   const target = getGlobalThis()
+  // 在全局标记 Vue 存在（便于 devtools 或外部检测）
   target.__VUE__ = true
   if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
+    // 注入 devtools 钩子
     setDevtoolsHook(target.__VUE_DEVTOOLS_GLOBAL_HOOK__, target)
   }
 
+  // 从宿主 options 解构所需宿主操作，并重命名为内部使用的 hostXxx
   const {
     insert: hostInsert,
     remove: hostRemove,
-    patchProp: hostPatchProp,
+    patchProp: hostPatchProp, // 为元素打补丁（属性/事件/指令等）
     createElement: hostCreateElement,
     createText: hostCreateText,
     createComment: hostCreateComment,
@@ -365,48 +374,61 @@ function baseCreateRenderer(
     setElementText: hostSetElementText,
     parentNode: hostParentNode,
     nextSibling: hostNextSibling,
-    setScopeId: hostSetScopeId = NOOP,
-    insertStaticContent: hostInsertStaticContent,
+    setScopeId: hostSetScopeId = NOOP, // 设置样式作用域 id（若宿主不支持则空实现）
+    insertStaticContent: hostInsertStaticContent, // 插入静态字符串内容（编译器静态提升用
   } = options
 
   // Note: functions inside this closure should use `const xxx = () => {}`
   // style in order to prevent being inlined by minifiers.
+  // 核心补丁函数：统一处理挂载/更新/卸载
   const patch: PatchFn = (
-    n1,
-    n2,
-    container,
-    anchor = null,
-    parentComponent = null,
-    parentSuspense = null,
-    namespace = undefined,
-    slotScopeIds = null,
-    optimized = __DEV__ && isHmrUpdating ? false : !!n2.dynamicChildren,
+    n1, // 旧 vnode，null 表示首次挂载
+    n2, // 新 vnode
+    container, // 宿主容器（如 DOM 元素）
+    anchor = null, // 插入锚点（如 DOM 元素）
+    parentComponent = null, // 父组件实例
+    parentSuspense = null, // 父 Suspense 边界
+    namespace = undefined, // 元素命名空间（如 SVG）
+    slotScopeIds = null, // 作用域插槽 ID
+    optimized = __DEV__ && isHmrUpdating ? false : !!n2.dynamicChildren, // 是否启用“块级树（Block Tree）”优化；HMR 时强制关闭
   ) => {
     if (n1 === n2) {
       return
     }
 
     // patching & not same type, unmount old tree
+    // 类型不同的替换：先卸载旧树，再重新挂载新树
+    // 旧节点存在但与新节点类型不一致
     if (n1 && !isSameVNodeType(n1, n2)) {
+      // 取旧树的下一个宿主节点作为后续插入锚点
       anchor = getNextHostNode(n1)
+      // 强制卸载旧 vnode 树
       unmount(n1, parentComponent, parentSuspense, true)
+      // 置空旧节点，使后续走“初次挂载”路径
       n1 = null
     }
 
+    // BAIL：放弃优化，回退完整 diff（例如手写 render 动态性过强）
     if (n2.patchFlag === PatchFlags.BAIL) {
+      // 关闭优化模式
       optimized = false
+      // 清空动态子节点标记
       n2.dynamicChildren = null
     }
 
+    // 提取类型、ref、形状标志（位掩码编码节点大类）
     const { type, ref, shapeFlag } = n2
     switch (type) {
       case Text:
+        // 文本挂载/更新
         processText(n1, n2, container, anchor)
         break
       case Comment:
+        // 注释挂载/复用
         processCommentNode(n1, n2, container, anchor)
         break
       case Static:
+        // 初次挂载
         if (n1 == null) {
           mountStaticNode(n2, container, anchor, namespace)
         } else if (__DEV__) {
@@ -414,6 +436,7 @@ function baseCreateRenderer(
         }
         break
       case Fragment:
+        // 处理 Fragment 子树的挂载/更新/卸载
         processFragment(
           n1,
           n2,
@@ -427,6 +450,7 @@ function baseCreateRenderer(
         )
         break
       default:
+        // 其他类型：元素、组件、Teleport、Suspense 等
         if (shapeFlag & ShapeFlags.ELEMENT) {
           processElement(
             n1,
@@ -2426,7 +2450,7 @@ function resolveChildrenNamespace(
     ? undefined
     : currentNamespace
 }
-
+// toggleRecurse 是组件渲染副作用的“递归更新刹车/释放”开关：在前置生命周期阶段先踩刹车（禁递归），确保不会在钩子里触发自身的再入队；进入渲染/补丁阶段后再松刹车（允递归），保证必要的更新能够顺利调度。
 function toggleRecurse(
   { effect, job }: ComponentInternalInstance,
   allowed: boolean,
